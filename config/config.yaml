@@ -1,0 +1,101 @@
+# AutoGluon project configuration file
+
+# Data configuration
+data:
+  # Raw data path
+  raw_data_path: "data/raw/train.csv"
+  # Test data path
+  test_data_path: "data/raw/test.csv"
+  # Processed data save path
+  processed_data_path: "data/processed/"
+  # Target column name
+  target_column: "target"
+  # Train/validation split ratio
+  train_split: 0.8
+  # Random seed
+  random_state: 42
+
+# Model training configuration
+model:
+  # Model save path
+  save_path: "models/"
+  # Training time limit in seconds (None means no limit)
+  time_limit: 600
+  # Preset quality: best_quality, high_quality, good_quality, medium_quality, low_quality
+  presets: "best_quality"
+  # Evaluation metric: accuracy, f1, roc_auc (classification); rmse, mae, r2 (regression)
+  eval_metric: "accuracy"
+  # Problem type: binary, multiclass, regression, quantile, softclass
+  problem_type: null  # null means auto-detect
+  # Whether to perform hyperparameter tuning
+  hyperparameter_tune: true
+  # Parallelism settings
+  num_cpus: null  # null means use all available CPUs
+  num_gpus: 0     # Number of GPUs
+  # Whether to save space (delete intermediate models)
+  save_space: false
+  # Whether to keep only the best models
+  keep_only_best: false
+  # Whether to use bagging/holdout ensemble
+  use_bag_holdout: true
+
+# Training configuration
+training:
+  # Number of cross-validation folds
+  num_folds: 5
+  # Whether to enable early stopping
+  early_stopping: true
+  # Verbosity level: 0-4, higher means more verbose output
+  verbosity: 2
+  # Whether to show training progress
+  show_progress: true
+  # Feature engineering policy
+  feature_engineering:
+    # Whether to perform automated feature engineering
+    auto_feature_engineering: true
+    # Maximum number of features
+    max_features: null
+
+# Prediction configuration
+prediction:
+  # Whether to output probabilities (for classification)
+  output_probabilities: true
+  # Batch size for batch prediction
+  batch_size: 1000
+
+# Evaluation configuration
+evaluation:
+  # List of evaluation metrics
+  metrics:
+    - "accuracy"
+    - "f1"
+    - "precision"
+    - "recall"
+  # Whether to generate confusion matrix
+  generate_confusion_matrix: true
+  # Whether to generate ROC curve
+  generate_roc_curve: true
+  # Whether to generate feature importance plots
+  generate_feature_importance: true
+  # Whether to save evaluation report
+  save_report: true
+  # Report save path
+  report_path: "results/"
+
+# Logging configuration
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  # Log file path
+  log_file: "logs/autogluon.log"
+  # Whether to output logs to console
+  console_output: true
+
+# Miscellaneous configuration
+misc:
+  # Whether to use caching
+  use_cache: true
+  # Cache directory
+  cache_dir: ".cache/"
+  # Whether to save intermediate results
+  save_intermediate: false
