@@ -10,16 +10,31 @@ from loguru import logger
 class LandmarkFeatureExtractor:
     """Extract position-invariant features from facial landmarks"""
     
-    def __init__(self, use_distances=True, use_angles=True, use_ratios=True):
+    def __init__(self, use_distances=True, use_angles=True, use_ratios=True, feature_config=None):
         """
         Args:
             use_distances: Use pairwise distances between landmarks
             use_angles: Use angles formed by landmark triplets
             use_ratios: Use distance ratios (scale-invariant)
+            feature_config: Optional dict with 'angle_triplets' and 'ratio_quadruplets' for fixed feature selection
         """
         self.use_distances = use_distances
         self.use_angles = use_angles
         self.use_ratios = use_ratios
+        self.feature_config = feature_config
+        
+        # If feature config is provided, use fixed triplets/quadruplets
+        if feature_config is not None:
+            self.angle_triplets = feature_config.get('angle_triplets', None)
+            self.ratio_quadruplets = feature_config.get('ratio_quadruplets', None)
+            logger.info(f"Using fixed feature selection:")
+            if self.angle_triplets:
+                logger.info(f"  - {len(self.angle_triplets)} angle triplets")
+            if self.ratio_quadruplets:
+                logger.info(f"  - {len(self.ratio_quadruplets)} ratio quadruplets")
+        else:
+            self.angle_triplets = None
+            self.ratio_quadruplets = None
         
     def extract_pairwise_distances(self, landmarks):
         """Compute all pairwise Euclidean distances between landmarks"""
@@ -38,17 +53,29 @@ class LandmarkFeatureExtractor:
         n_points = len(landmarks)
         angles = []
         
-        np.random.seed(42)  # Fixed seed for reproducibility
-        for _ in range(n_samples):
-            i, j, k = np.random.choice(n_points, 3, replace=False)
-            
-            v1 = landmarks[i] - landmarks[j]
-            v2 = landmarks[k] - landmarks[j]
-            
-            cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
-            cos_angle = np.clip(cos_angle, -1.0, 1.0)
-            angle = np.arccos(cos_angle)
-            angles.append(angle)
+        # If fixed triplets are provided, use them
+        if self.angle_triplets is not None:
+            for i, j, k in self.angle_triplets:
+                v1 = landmarks[i] - landmarks[j]
+                v2 = landmarks[k] - landmarks[j]
+                
+                cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+                cos_angle = np.clip(cos_angle, -1.0, 1.0)
+                angle = np.arccos(cos_angle)
+                angles.append(angle)
+        else:
+            # Use random sampling (legacy behavior)
+            np.random.seed(42)  # Fixed seed for reproducibility
+            for _ in range(n_samples):
+                i, j, k = np.random.choice(n_points, 3, replace=False)
+                
+                v1 = landmarks[i] - landmarks[j]
+                v2 = landmarks[k] - landmarks[j]
+                
+                cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+                cos_angle = np.clip(cos_angle, -1.0, 1.0)
+                angle = np.arccos(cos_angle)
+                angles.append(angle)
         
         return np.array(angles)
     
@@ -57,15 +84,25 @@ class LandmarkFeatureExtractor:
         n_points = len(landmarks)
         ratios = []
         
-        np.random.seed(42)
-        for _ in range(n_samples):
-            i, j, k, m = np.random.choice(n_points, 4, replace=False)
-            
-            dist1 = np.linalg.norm(landmarks[i] - landmarks[j])
-            dist2 = np.linalg.norm(landmarks[k] - landmarks[m])
-            
-            ratio = dist1 / (dist2 + 1e-8)
-            ratios.append(ratio)
+        # If fixed quadruplets are provided, use them
+        if self.ratio_quadruplets is not None:
+            for i, j, k, m in self.ratio_quadruplets:
+                dist1 = np.linalg.norm(landmarks[i] - landmarks[j])
+                dist2 = np.linalg.norm(landmarks[k] - landmarks[m])
+                
+                ratio = dist1 / (dist2 + 1e-8)
+                ratios.append(ratio)
+        else:
+            # Use random sampling (legacy behavior)
+            np.random.seed(42)
+            for _ in range(n_samples):
+                i, j, k, m = np.random.choice(n_points, 4, replace=False)
+                
+                dist1 = np.linalg.norm(landmarks[i] - landmarks[j])
+                dist2 = np.linalg.norm(landmarks[k] - landmarks[m])
+                
+                ratio = dist1 / (dist2 + 1e-8)
+                ratios.append(ratio)
         
         return np.array(ratios)
     

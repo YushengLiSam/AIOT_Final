@@ -43,7 +43,11 @@ def process_image(img_path, src_root, tgt_root, head, overwrite=False):
             person_kpts = keypoints[0]
             person_scores = scores[0] if scores is not None and len(scores) > 0 else None
 
-            head_kpts = person_kpts.astype(float)
+            # Extract only face keypoints (indices 23-90, total 68 points)
+            # COCO wholebody format: 0-22 body, 23-90 face, 91-132 hands
+            face_kpts = person_kpts[23:91].astype(float)  # (68, 2)
+            head_kpts = face_kpts
+            
             # normalize by width/height (x by w, y by h)
             head_kpts[:, 0] = head_kpts[:, 0] / float(w)
             head_kpts[:, 1] = head_kpts[:, 1] / float(h)
@@ -119,15 +123,17 @@ def main():
     # pose='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-face6_pt-in1k_120e-256x256-72a37400_20230529.zip'
     # pose_input_size=(256, 256)
 
-    head = Custom(to_openpose=args.openpose_skeleton,
-                det_class='YOLOX',
-                det='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/yolox_tiny_8xb8-300e_humanart-6f3252f9.zip',
-                det_input_size=(416, 416),
-                pose_class='RTMPose',
-                pose='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-face6_pt-in1k_120e-256x256-72a37400_20230529.zip',
-                pose_input_size=(256, 256),
-                backend=args.backend,
-                device=args.device)
+    head = Custom(
+            det_class='YOLOX',
+            det='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/yolox_m_8xb8-300e_humanart-c2c7a14a.zip',
+            det_input_size=(640, 640),
+            pose_class='RTMPose',
+            # pose='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-face6_pt-in1k_120e-256x256-72a37400_20230529.zip',
+            pose='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-ucoco_dw-ucoco_270e-256x192-c8b76419_20230728.zip',
+            pose_input_size=(192, 256),
+            backend='onnxruntime',
+            device=args.device
+        )
 
     # Check if src_dir contains subdirectories or files directly
     subdirs = [d for d in os.listdir(args.src_dir) if os.path.isdir(os.path.join(args.src_dir, d))]

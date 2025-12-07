@@ -20,8 +20,9 @@ from loguru import logger
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data_loader import load_landmark_data
+from src.data_loader import load_landmark_data, load_feature_data
 from src.features_extraction import LandmarkFeatureExtractor, extract_features_from_landmarks
+from src.feature_selection import select_discriminative_features, load_feature_config
 
 
 def stratified_split_by_class(df, test_size, val_size, random_state=42):
@@ -98,9 +99,17 @@ def prepare_dataframe(X_features, y_labels, feature_extractor):
     Convert features and labels to DataFrame for AutoGluon
     """
     # Create feature column names
-    n_center = 106 if feature_extractor.use_distances else 0
-    n_angles = 200 if feature_extractor.use_angles else 0
-    n_ratios = 150 if feature_extractor.use_ratios else 0
+    # Note: Using 68 face keypoints from COCO wholebody (indices 23-90)
+    n_center = 68 if feature_extractor.use_distances else 0
+    
+    # If using fixed feature selection, use the actual number of selected features
+    if feature_extractor.feature_config is not None:
+        n_angles = len(feature_extractor.angle_triplets) if feature_extractor.use_angles and feature_extractor.angle_triplets else 0
+        n_ratios = len(feature_extractor.ratio_quadruplets) if feature_extractor.use_ratios and feature_extractor.ratio_quadruplets else 0
+    else:
+        # Legacy: random sampling
+        n_angles = 200 if feature_extractor.use_angles else 0
+        n_ratios = 150 if feature_extractor.use_ratios else 0
     
     columns = []
     if feature_extractor.use_distances:
@@ -121,14 +130,14 @@ def main():
     parser = argparse.ArgumentParser(description='Train emotion classifier with AutoGluon')
     parser.add_argument('--data_root', type=str, default='data/landmarks/affectnet',
                        help='Path to landmark data directory')
-    parser.add_argument('--save_dir', type=str, default='models/emotion_classifier2',
+    parser.add_argument('--save_dir', type=str, default='models/emotion_classifier3',
                        help='Directory to save trained model')
-    parser.add_argument('--val_size', type=float, default=0.2,
-                       help='Validation set size ratio (from training data)')
+    parser.add_argument('--val_size', type=float, default=0.3,
+                       help='Validation set size ratio (from training data, default: 0.3)')
     parser.add_argument('--test_size', type=float, default=0.2,
                        help='Test set size ratio')
-    parser.add_argument('--time_limit', type=int, default=600,
-                       help='Time limit for training in seconds (default: 600=10min)')
+    parser.add_argument('--time_limit', type=int, default=3000,
+                       help='Time limit for training in seconds (default: 3000=50min)')
     parser.add_argument('--presets', type=str, default='medium_quality',
                        choices=['best_quality', 'high_quality', 'good_quality', 
                                'medium_quality', 'optimize_for_deployment'],
@@ -142,6 +151,14 @@ def main():
                        help='Number of CPU cores to use (default: 16)')
     parser.add_argument('--num_gpus', type=int, default=1,
                        help='Number of GPUs to use (default: 1)')
+    parser.add_argument('--use_feature_selection', type=bool, default=True,
+                       help='Use ANOVA F-test based feature selection for angles and ratios')
+    parser.add_argument('--n_samples_per_class', type=int, default=100,
+                       help='Number of samples per class for feature selection (default: 100)')
+    parser.add_argument('--n_angle_features', type=int, default=200,
+                       help='Number of angle features to select (default: 200)')
+    parser.add_argument('--n_ratio_features', type=int, default=200,
+                       help='Number of ratio features to select (default: 200)')
     
     args = parser.parse_args()
     
@@ -159,6 +176,39 @@ def main():
         logger.error("No data loaded!")
         return
     
+    # Step 1.5: Feature selection (if enabled)
+    feature_config = None
+    feature_config_path = Path(args.data_root) / 'feature_config.txt'
+    
+    if args.use_feature_selection:
+        logger.info("\n" + "="*60)
+        logger.info("STEP 1.5: Discriminative Feature Selection (ANOVA F-test)")
+        logger.info("="*60)
+        
+        # Check if feature_config.txt already exists
+        if feature_config_path.exists():
+            logger.info(f"Found existing feature config: {feature_config_path}")
+            logger.info("Loading existing feature configuration...")
+            feature_config = load_feature_config(str(feature_config_path))
+            logger.info(f"  Loaded {len(feature_config['angle_triplets'])} angle features")
+            logger.info(f"  Loaded {len(feature_config['ratio_quadruplets'])} ratio features")
+        else:
+            logger.info(f"No existing feature config found")
+            logger.info("Performing feature selection...")
+            
+            feature_config = select_discriminative_features(
+                X_landmarks=X_landmarks,
+                y_labels=y_labels,
+                emotion_labels=emotion_labels,
+                data_root=args.data_root,  # Will auto-save to data_root/feature_config.txt
+                n_samples_per_class=args.n_samples_per_class,
+                n_angle_features=args.n_angle_features,
+                n_ratio_features=args.n_ratio_features,
+                random_state=args.random_state
+            )
+            
+            logger.info(f"Feature configuration saved to: {feature_config_path}")
+    
     # Step 2: Extract position-invariant features
     logger.info("\n" + "="*60)
     logger.info("STEP 2: Extracting position-invariant features")
@@ -166,7 +216,8 @@ def main():
     feature_extractor = LandmarkFeatureExtractor(
         use_distances=True,
         use_angles=True,
-        use_ratios=True
+        use_ratios=True,
+        feature_config=feature_config  # Pass feature config if available
     )
     X_features = extract_features_from_landmarks(X_landmarks, feature_extractor)
     
@@ -174,7 +225,9 @@ def main():
     logger.info("\n" + "="*60)
     logger.info("STEP 3: Preparing data for AutoGluon")
     logger.info("="*60)
+    
     df = prepare_dataframe(X_features, y_labels, feature_extractor)
+    
     # Add file paths to DataFrame for tracking
     df['file_path'] = file_paths
     logger.info(f"DataFrame shape: {df.shape}")
@@ -265,6 +318,39 @@ def main():
     
     start_time = time.time()
     
+    # Enhanced regularization settings
+    # Add hyperparameter configurations for better generalization
+    hyperparameters = {
+        'GBM': [
+            {'extra_trees': True, 'ag_args': {'name_suffix': 'XT'}},
+            {},
+            'GBMLarge',
+        ],
+        'CAT': {},
+        'XGB': {},
+        'RF': [
+            {'criterion': 'gini', 'ag_args': {'name_suffix': 'Gini', 'problem_types': ['binary', 'multiclass']}},
+            {'criterion': 'entropy', 'ag_args': {'name_suffix': 'Entr', 'problem_types': ['binary', 'multiclass']}},
+        ],
+        'XT': [
+            {'criterion': 'gini', 'ag_args': {'name_suffix': 'Gini', 'problem_types': ['binary', 'multiclass']}},
+            {'criterion': 'entropy', 'ag_args': {'name_suffix': 'Entr', 'problem_types': ['binary', 'multiclass']}},
+        ],
+    }
+    
+    # AG args for fit - enable early stopping and increase regularization
+    ag_args_fit = {
+        'num_cpus': args.num_cpus,
+        'num_gpus': args.num_gpus,
+    }
+    
+    # Hyperparameter tune kwargs for more aggressive regularization
+    hyperparameter_tune_kwargs = {
+        'num_trials': 5,  # Number of HPO trials per model
+        'scheduler': 'local',
+        'searcher': 'auto',
+    }
+    
     predictor = TabularPredictor(
         label='emotion',
         path=str(save_path),
@@ -276,12 +362,13 @@ def main():
         tuning_data=val_df,  # Use validation set for hyperparameter tuning
         time_limit=args.time_limit,
         presets=args.presets,
+        hyperparameters=hyperparameters,
+        hyperparameter_tune_kwargs=hyperparameter_tune_kwargs,
+        ag_args_fit=ag_args_fit,
         excluded_model_types=args.exclude_models,  # Exclude slow models
-        num_bag_folds=5,
+        num_bag_folds=8,  # Increased from 5 to 8 for stronger regularization
         num_stack_levels=1,
         use_bag_holdout=True,  # Required to use tuning_data with bagging
-        num_cpus=args.num_cpus,
-        num_gpus=args.num_gpus
     )
     
     train_time = time.time() - start_time

@@ -61,6 +61,25 @@ class MultiModelEmotionPredictor:
                 feature_extractor_path = model_dir / 'feature_extractor.pkl'
                 feature_extractor = joblib.load(feature_extractor_path)
                 
+                # Try to load feature config if available
+                feature_config_path = model_dir / 'feature_config.txt'
+                
+                feature_config = None
+                if feature_config_path.exists():
+                    logger.info(f"    Loading feature config from: {feature_config_path}")
+                    from src.feature_selection import load_feature_config
+                    feature_config = load_feature_config(str(feature_config_path))
+                
+                if feature_config is not None:
+                    # Update feature extractor with config
+                    feature_extractor.feature_config = feature_config
+                    feature_extractor.angle_triplets = feature_config.get('angle_triplets', None)
+                    feature_extractor.ratio_quadruplets = feature_config.get('ratio_quadruplets', None)
+                    if feature_extractor.angle_triplets:
+                        logger.info(f"      Using {len(feature_extractor.angle_triplets)} fixed angle triplets")
+                    if feature_extractor.ratio_quadruplets:
+                        logger.info(f"      Using {len(feature_extractor.ratio_quadruplets)} fixed ratio quadruplets")
+                
                 self.predictors.append(predictor)
                 self.feature_extractors.append(feature_extractor)
                 self.model_names.append(model_dir.name)
@@ -83,12 +102,16 @@ class MultiModelEmotionPredictor:
         logger.info(f"Confidence threshold: {self.confidence_threshold:.2f} (predictions below this will be classified as 'none')")
         
         # Initialize landmark detector
-        # Note: RTMPose face model has built-in face detection, no need for separate detector
         logger.info("Initializing landmark detector...")
+        
         self.landmark_detector = Custom(
+            det_class='YOLOX',
+            det='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/yolox_m_8xb8-300e_humanart-c2c7a14a.zip',
+            det_input_size=(640, 640),
             pose_class='RTMPose',
-            pose='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-face6_pt-in1k_120e-256x256-72a37400_20230529.zip',
-            pose_input_size=(256, 256),
+            # pose='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-face6_pt-in1k_120e-256x256-72a37400_20230529.zip',
+            pose='https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-ucoco_dw-ucoco_270e-256x192-c8b76419_20230728.zip',
+            pose_input_size=(192, 256),
             backend='onnxruntime',
             device=device
         )
@@ -102,14 +125,14 @@ class MultiModelEmotionPredictor:
             image: Input image (BGR)
         
         Returns:
-            landmarks: Normalized landmarks (106, 2)
-            landmarks_px: Pixel coordinates (106, 2)
+            landmarks: Normalized face landmarks (68, 2) - extracted from COCO wholebody indices 23-90
+            landmarks_px: Pixel coordinates (68, 2)
             bbox: Bounding box [x1, y1, x2, y2]
             extract_time: Extraction time in seconds
         """
         start_time = time.time()
         
-        # Detect landmarks
+        # Detect landmarks (133 wholebody keypoints)
         keypoints, scores = self.landmark_detector(image)
         
         extract_time = time.time() - start_time
@@ -117,10 +140,15 @@ class MultiModelEmotionPredictor:
         if keypoints is None or len(keypoints) == 0:
             raise ValueError("No face detected in image")
         
-        # Use first detected face
-        landmarks_px = keypoints[0]  # (106, 2)
+        # Use first detected person
+        all_keypoints = keypoints[0]  # (133, 2)
         
-        # Get bounding box
+        # Extract only face keypoints (indices 23-90, total 68 points)
+        # COCO wholebody format: 0-22 body, 23-90 face, 91-132 hands
+        face_keypoints_px = all_keypoints[23:91]  # (68, 2)
+        landmarks_px = face_keypoints_px
+        
+        # Get bounding box from face keypoints only
         x_min, y_min = landmarks_px.min(axis=0)
         x_max, y_max = landmarks_px.max(axis=0)
         margin = 20
@@ -144,7 +172,7 @@ class MultiModelEmotionPredictor:
         Predict emotion using specified model
         
         Args:
-            landmarks: Normalized landmarks (106, 2)
+            landmarks: Normalized face landmarks (68, 2) - extracted from COCO wholebody
             model_idx: Index of model to use
         
         Returns:
@@ -160,10 +188,17 @@ class MultiModelEmotionPredictor:
         feature_extractor = self.feature_extractors[model_idx]
         features = feature_extractor.extract_features(landmarks)
         
-        # Create DataFrame
-        n_center = 106 if feature_extractor.use_distances else 0
-        n_angles = 200 if feature_extractor.use_angles else 0
-        n_ratios = 150 if feature_extractor.use_ratios else 0
+        # Create DataFrame with proper feature count based on 68 face keypoints
+        # If using fixed feature selection, use actual number of selected features
+        if feature_extractor.feature_config is not None:
+            n_center = 68 if feature_extractor.use_distances else 0
+            n_angles = len(feature_extractor.angle_triplets) if feature_extractor.use_angles and feature_extractor.angle_triplets else 0
+            n_ratios = len(feature_extractor.ratio_quadruplets) if feature_extractor.use_ratios and feature_extractor.ratio_quadruplets else 0
+        else:
+            # Legacy: random sampling
+            n_center = 68 if feature_extractor.use_distances else 0
+            n_angles = 200 if feature_extractor.use_angles else 0
+            n_ratios = 150 if feature_extractor.use_ratios else 0
         
         columns = []
         if feature_extractor.use_distances:
@@ -208,7 +243,7 @@ class MultiModelEmotionPredictor:
         Predict using all models
         
         Args:
-            landmarks: Normalized landmarks (106, 2)
+            landmarks: Normalized face landmarks (68, 2) from COCO wholebody
         
         Returns:
             results: List of prediction results for each model
@@ -396,9 +431,9 @@ def main():
     parser.add_argument('--model_name', type=str, default=None,
                        help='Specific model name to use (e.g., WeightedEnsemble_L3, LightGBM_BAG_L1). '
                             'If not specified, uses the best model. Use --list_models to see available models.')
-    parser.add_argument('--confidence_threshold', type=float, default=0.5,
+    parser.add_argument('--confidence_threshold', type=float, default=0.3,
                        help='Minimum confidence threshold for valid prediction. '
-                            'If max confidence < threshold, classify as "none" (default: 0.5)')
+                            'If max confidence < threshold, classify as "none" (default: 0.3)')
     parser.add_argument('--list_models', action='store_true',
                        help='List all available models in the model directory and exit')
     
