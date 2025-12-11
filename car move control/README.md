@@ -1,144 +1,77 @@
-# LLM-Ready ESP32 Robot Car API
+# 🚗 AIoT Smart Pet Car (ESP32 Firmware)
 
-**A MicroPython-based REST API firmware for 4WD DC motor robot cars.**
-
-This project turns an ESP32-based robot car into an **IoT device** controllable via HTTP requests. It is specifically designed to be operated by **AI Agents (LLMs)** like ChatGPT, Claude, or local models, featuring precise time-based turning algorithms and JSON-formatted responses.
-
------
+This repository contains the MicroPython firmware for the **AIoT Final Project**. The system controls a 4-wheel drive robot car powered by an ESP32, featuring HTTP API control, environmental sensing (Temperature), and interactive touch feedback via a light sensor.
 
 ## ✨ Features
 
-  * **REST API Control**: Control the car using simple HTTP GET requests.
-  * **LLM Integration**: Returns standardized JSON responses (`status`, `result`) optimized for AI tool calling.
-  * **Smart Turning Algorithm**: Automatically calculates rotation time based on input degrees (e.g., `turn(90)` vs `turn(45)`).
-  * **PWM Speed Control**: Soft-start and speed limiting to protect gearboxes and ensure stability.
-  * **No-Code Operation**: Once flashed, the car connects to Wi-Fi and waits for commands.
+* **RESTful API Control**: Control movement (Forward, Backward, Turn) via HTTP GET requests.
+* **Environmental Sensing**: Real-time temperature monitoring using the **BMP280** sensor.
+* **Interactive "Petting" Mode**: Uses a light sensor (Photoresistor) to detect touch. When "pet" (covered) for 500ms, it triggers a callback to a host computer.
+* **Non-blocking Server**: Uses `uselect` polling to handle HTTP requests while simultaneously monitoring sensors.
+* **WiFi Connectivity**: Auto-connects to configured WiFi and broadcasts its IP.
 
------
+## 🛠 Hardware Configuration
 
-## 🛠️ Hardware Requirements
+### Pin Mapping
 
-  * **Controller**: ESP32 Development Board (e.g., Adafruit Feather V2, DevKit V1).
-  * **Motors**: 4x DC Gear Motors (Yellow "TT" motors).
-  * **Drivers**: 2x L298N Dual H-Bridge Motor Drivers.
-  * **Power**: 12V Battery Pack (High current, \>3A recommended).
-  * **Chassis**: 4WD Car Chassis.
+| Component | ESP32 GPIO Pins | Description |
+| :--- | :--- | :--- |
+| **Right Motors** | 14, 32, 15, 33 | PWM Channels for Right Wheels |
+| **Left Motors** | 21, 19, 5, 4 | PWM Channels for Left Wheels |
+| **I2C Bus** | SDA: 22, SCL: 20 | For BMP280 Sensor |
+| **Light Sensor** | 37 (ADC1) | Analog input for touch detection |
 
------
-
-## Wiring & Pinout
-
-This firmware uses **8 GPIOs** to control 4 motors independently (via PWM).
-
-### Power Connections
-
-  * **Battery (+)** $\to$ L298N 12V Input (Both drivers).
-  * **Battery (-)** $\to$ L298N GND **AND** ESP32 GND (**Common Ground is critical**).
-  * **ESP32 Power** $\to$ USB via Raspberry Pi or Step-down converter (5V).
-
-### GPIO Mapping (Configured in `main.py`)
-
-| Motor Group | L298N Pin | ESP32 Pin (GPIO) | Description |
-| :--- | :--- | :--- | :--- |
-| **Right Side** | IN1 | **14** | Right Front/Back Forward |
-| | IN2 | **32** | Right Front/Back Backward |
-| | IN3 | **15** | Right Front/Back Forward |
-| | IN4 | **33** | Right Front/Back Backward |
-| **Left Side** | IN1 | **21** | Left Front/Back Forward |
-| | IN2 | **19** | Left Front/Back Backward |
-| | IN3 | **5** | Left Front/Back Forward |
-| | IN4 | **4** | Left Front/Back Backward |
-
-> **Note**: If your wheels spin in the wrong direction, swap the two wires connecting the motor to the L298N green terminal. Do not change the code.
-
------
+### Bill of Materials (BOM)
+* ESP32 Development Board
+* L298N (or similar) Motor Driver
+* 4x DC Motors & Wheels
+* BMP280 Barometric Pressure & Temp Sensor
+* Photoresistor (Light Sensor)
+* Power Supply (Battery Pack)
 
 ## 🚀 Installation & Setup
 
 1.  **Flash MicroPython**: Ensure your ESP32 is flashed with the latest MicroPython firmware.
-2.  **Configuration**: Open `main.py` and edit the Wi-Fi credentials:
+2.  **Upload Dependencies**:
+    * Upload `bmp280.py` (Driver library) to the root of the ESP32.
+    * Upload `main.py` (The code in this repo).
+3.  **Configure Network**:
+    Open `main.py` and update the following variables:
     ```python
     WIFI_SSID = "Your_WiFi_Name"
     WIFI_PASS = "Your_WiFi_Password"
+    
+    # IP of the computer running the emotional recognition/controller backend
+    PC_IP = "192.168.0.172" 
     ```
-3.  **Upload**: Use **Thonny IDE** to save the file as `main.py` directly to the ESP32.
-4.  **Run**: Reset the board. Watch the console for the IP address:
+4.  **Run**: Reset the board. The serial monitor will output:
     ```text
-    >>> API Ready at: http://192.168.1.X
+    [Init] BMP280 Ready
+    Connecting WiFi...
+    >>> API Ready: [http://192.168.0.xxx](http://192.168.0.xxx)
     ```
 
------
+## 📡 API Reference
 
-## 📡 API Documentation
+The car runs a lightweight HTTP server on **Port 80**.
 
-The car runs a lightweight web server on port **80**.
+### 1. Movement Control
+| Endpoint | Method | Params | Description |
+| :--- | :--- | :--- | :--- |
+| `/forward` | `GET` | None | Moves forward for 1 second. |
+| `/backward` | `GET` | None | Moves backward for 1 second. |
+| `/turn` | `GET` | `angle` (int) | Turns left (negative) or right (positive).<br>Example: `/turn?angle=90` |
 
-### 1\. Move Forward
+### 2. System Status
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/status` | `GET` | Returns JSON with status and temperature. |
 
-  * **Endpoint**: `GET /forward`
-  * **Action**: Moves forward for **1 second**, then stops automatically.
-  * **Response**: `{"status": "success", "result": "Moved Forward 1s."}`
-
-### 2\. Move Backward
-
-  * **Endpoint**: `GET /backward`
-  * **Action**: Moves backward for **1 second**, then stops automatically.
-  * **Response**: `{"status": "success", "result": "Moved Backward 1s."}`
-
-### 3\. Turn (Precise Angle)
-
-  * **Endpoint**: `GET /turn?angle=<degrees>`
-  * **Parameters**:
-      * `angle` (int):
-          * **Positive (+)**: Turn Right (Clockwise).
-          * **Negative (-)**: Turn Left (Counter-Clockwise).
-  * **Examples**:
-      * `/turn?angle=90` (Right turn)
-      * `/turn?angle=-45` (Left turn)
-      * `/turn?angle=180` (U-Turn)
-  * **Response**: `{"status": "success", "result": "Turned 90 degrees"}`
-
------
-
-## ⚙️ Calibration (Optional)
-
-If the car turns too much or too little, adjust these constants at the top of `main.py`:
-
-```python
-# Speed (0-1023): Adjust motor power
-SPEED = 200 
-
-# Calibration: How many seconds does it take to turn 90 degrees?
-# Increase if it turns < 90, Decrease if it turns > 90.
-TIME_FOR_90 = 0.75 
-```
-
------
-
-## 🤖 LLM System Prompt (Integration Guide)
-
-To control this car using an AI Agent (like ChatGPT or LangChain), copy and paste the following system prompt into your LLM:
-
-```markdown
-# Role
-You are an AI agent controlling a physical robot car via HTTP APIs.
-The car accepts commands at: http://[INSERT_CAR_IP_HERE]
-
-# API Tools
-1. **Move Forward**: `GET /forward` (Moves 1s)
-2. **Move Backward**: `GET /backward` (Moves 1s)
-3. **Turn**: `GET /turn?angle={degrees}`
-   - Positive angle = Right Turn.
-   - Negative angle = Left Turn.
-
-# Instructions
-- To move in a square: Forward -> Turn 90 -> Forward -> Turn 90...
-- Always wait for the HTTP response before sending the next command.
-- Output a Python script using the `requests` library to perform the user's task.
-```
-
------
-
-## 📝 License
-
-This project is open-source. Feel free to modify and distribute.
+**Response Example:**
+```json
+{
+    "status": "success",
+    "result": "Status OK",
+    "temp": 24.50,
+    "device": "esp32-pet"
+}
